@@ -4,6 +4,7 @@ import pandas as pd
 import os
 import sys
 import time
+import random
 
 # Add SELFRec path
 sys.path.append('/home/llogn/workspace/temp/SELFRec')
@@ -33,13 +34,49 @@ def get_hotels_by_ids(conn, hotel_ids):
     """
     return pd.read_sql_query(query, conn, params=hotel_ids)
 
-def display_hotel_card(hotel_row, rank=None):
+def get_hotel_image(hotel_id, images_folder="./hotel_images", used_images=None):
+    """Lấy đường dẫn ảnh cho hotel từ folder ảnh"""
+    # Kiểm tra folder tồn tại
+    if not os.path.exists(images_folder):
+        return None
+    
+    # Lấy danh sách file ảnh trong folder
+    valid_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
+    image_files = sorted([f for f in os.listdir(images_folder) 
+                   if f.lower().endswith(valid_extensions)])
+    
+    if not image_files:
+        return None
+    
+    # Nếu có danh sách ảnh đã dùng, loại bỏ chúng
+    if used_images is not None:
+        available_images = [f for f in image_files if f not in used_images]
+        if available_images:
+            # Chọn ảnh đầu tiên còn available
+            selected_image = available_images[0]
+            used_images.add(selected_image)
+            return os.path.join(images_folder, selected_image)
+    
+    # Fallback: dùng hash nếu không có tracking
+    image_index = hash(str(hotel_id)) % len(image_files)
+    selected_image = image_files[image_index]
+    
+    return os.path.join(images_folder, selected_image)
+
+def display_hotel_card(hotel_row, rank=None, images_folder="./img", used_images=None):
     """Hiển thị thông tin hotel dưới dạng card với ảnh bên trái và thông tin bên phải"""
-    col1, col2 = st.columns([1, 3])
+    col1, col2 = st.columns([2, 3])
     
     with col1:
-        st.image("https://via.placeholder.com/200x150?text=Hotel+Image", 
-                 width=200, caption=f"Hotel ID: {hotel_row['hotel_id']}")
+        # Lấy ảnh từ folder
+        image_path = get_hotel_image(hotel_row['hotel_id'], images_folder, used_images)
+        
+        if image_path and os.path.exists(image_path):
+            st.image(image_path, width=400, caption=f"Hotel ID: {hotel_row['hotel_id']}")
+        else:
+            # Fallback nếu không có ảnh
+            st.image("https://via.placeholder.com/200x150?text=Hotel+Image", 
+                     width=400, caption=f"Hotel ID: {hotel_row['hotel_id']}")
     
     with col2:
         title = f"#{rank} - {hotel_row['name']}" if rank else hotel_row['name']
@@ -151,32 +188,32 @@ def main():
     )
     
     # Train button
-    if st.sidebar.button("🚀 Train Model", type="primary"):
-        with st.spinner(f"Đang train model {selected_model}..."):
-            try:
-                wrapper = RecommenderWrapper(selected_model)
-                
-                progress_bar = st.sidebar.progress(0)
-                status_text = st.sidebar.empty()
-                
-                status_text.text("Initializing...")
-                progress_bar.progress(20)
-                
-                status_text.text("Training...")
-                progress_bar.progress(50)
-                
-                wrapper.train()
-                
-                progress_bar.progress(100)
-                status_text.text("Training completed!")
-                
-                st.session_state.trained_model = wrapper
-                st.session_state.model_name = selected_model
-                
-                st.sidebar.success(f"✅ Model {selected_model} đã train xong!")
-                
-            except Exception as e:
-                st.sidebar.error(f"❌ Lỗi khi train: {str(e)}")
+    if st.sidebar.button("Chọn Model", type="primary"):
+        # with st.spinner(f"Đang train model {selected_model}..."):
+        try:
+            wrapper = RecommenderWrapper(selected_model)
+            
+            progress_bar = st.sidebar.progress(0)
+            status_text = st.sidebar.empty()
+            
+            status_text.text("Initializing...")
+            progress_bar.progress(20)
+            
+            status_text.text("Running...")
+            progress_bar.progress(50)
+            
+            wrapper.train()
+            
+            progress_bar.progress(100)
+            status_text.text("Succeeded!")
+            
+            st.session_state.trained_model = wrapper
+            st.session_state.model_name = selected_model
+            
+            # st.sidebar.success(f"✅ Model {selected_model} đã train xong!")
+            
+        except Exception as e:
+            st.sidebar.error(f"❌ Lỗi khi train: {str(e)}")
     
     # Show current model status
     if st.session_state.trained_model:
@@ -225,17 +262,19 @@ def main():
             recommended_hotels = get_hotels_by_ids(conn, hotel_ids)
             
             if not recommended_hotels.empty:
+                used_images = set()  # Track ảnh đã sử dụng
                 for rank, (idx, hotel_row) in enumerate(recommended_hotels.iterrows(), 1):
                     with st.container():
-                        display_hotel_card(hotel_row, rank=rank)
+                        display_hotel_card(hotel_row, rank=rank, used_images=used_images)
                         st.markdown("---")
             else:
                 st.info("Đang hiển thị danh sách hotel mặc định (recommendations không match với database)")
                 # Fallback: hiển thị top hotels
                 hotels_df = get_hotels_data(conn)
+                used_images = set()  # Track ảnh đã sử dụng
                 for idx, hotel_row in hotels_df.head(top_k).iterrows():
                     with st.container():
-                        display_hotel_card(hotel_row)
+                        display_hotel_card(hotel_row, used_images=used_images)
                         st.markdown("---")
         else:
             # Default view - show all hotels
@@ -247,11 +286,12 @@ def main():
             if hotels_df.empty:
                 st.warning("Không có dữ liệu hotel trong database.")
             else:
+                used_images = set()  # Track ảnh đã sử dụng
                 for idx, hotel_row in hotels_df.head(10).iterrows():
                     with st.container():
-                        display_hotel_card(hotel_row)
+                        display_hotel_card(hotel_row, used_images=used_images)
                         st.markdown("---")
-                        
+
     except Exception as e:
         st.error(f"Lỗi khi tải dữ liệu: {str(e)}")
         st.info("Đảm bảo file database.db tồn tại và có bảng phù hợp.")
